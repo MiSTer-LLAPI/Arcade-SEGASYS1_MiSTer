@@ -13,3 +13,5 @@ set_global_assignment -name VERILOG_FILE rtl/HVGEN.v
 set_global_assignment -name VERILOG_FILE rtl/hiscore.v
 set_global_assignment -name VHDL_FILE rtl/dpram.vhd
 set_global_assignment -name SYSTEMVERILOG_FILE "Arcade-SEGASYS1.sv"
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/llapi.sv
+

@@ -4,6 +4,10 @@
 //                        Copyright (c) 2019,20 MiSTer-X
 //=========================================================
 
+//LLAPI NOTE: 
+// llapi.sv needs to be in rtl folder and needs to be declared in file.qip (set_global_assignment -name SYSTEMVERILOG_FILE rtl/llapi.sv)
+
+
 module emu
 (
 	//Master input clock
@@ -163,11 +167,17 @@ assign {SDRAM_DQ, SDRAM_A, SDRAM_BA, SDRAM_CLK, SDRAM_CKE, SDRAM_DQML, SDRAM_DQM
 
 assign VGA_F1    = 0;
 assign VGA_SCALER= 0;
-assign USER_OUT  = '1;
-assign LED_USER  = ioctl_download;
+//assign USER_OUT  = '1; //LLAPI
+assign LED_USER  = ioctl_download | MY_LED; //LLAPI add MY_LED for debug purpose
 assign LED_DISK  = 0;
 assign LED_POWER = 0;
-assign BUTTONS   = 0;
+
+//LLAPI
+//Remap OSD buttons to LLAPI specifc combinaison (see LLAPI main block)
+assign BUTTONS   = llapi_osd;
+//assign BUTTONS   = 0;
+//END
+
 assign AUDIO_MIX = 0;
 assign FB_FORCE_BLANK = '0;
 
@@ -186,6 +196,15 @@ localparam CONF_STR = {
 	"O35,Scandoubler Fx,None,HQ2x,CRT 25%,CRT 50%,CRT 75%;",
 	"O7,Pause when OSD is open,On,Off;",
 	"-;",
+	
+	//LLAPI
+	//Add LLAPI option to the OSD menu, swapped NONE with LLAPI
+	//To detect LLAPI status[10] = 1 
+	//Always double check witht the bits map allocation table to avoid conflicts	
+	"OA,LLAPI,OFF,ON;",
+	"-;",
+	//END
+	
 	"DIP;",
 	"-;",
 	"OOS,Analog Video H-Pos,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31;",
@@ -228,8 +247,9 @@ wire	[7:0]		ioctl_index;
 wire	[24:0]	ioctl_addr;
 wire	[7:0]		ioctl_dout;
 wire	[7:0]		ioctl_din;
-
-wire	[15:0]	joy1, joy2;
+//LLAPI
+wire	[15:0]	usb_joy1, usb_joy2, joy1, joy2;
+//END
 wire	[15:0]	joy = joy1 | joy2;
 wire	[8:0]		spinner_0, spinner_1;
 wire	[24:0]	ps2_mouse;
@@ -261,11 +281,175 @@ hps_io #(.STRLEN($size(CONF_STR)>>3)) hps_io
 	.ioctl_index(ioctl_index),
 
 	.ps2_mouse(ps2_mouse),
-	.joystick_0(joy1),
-	.joystick_1(joy2),
+	//LLAPI
+	.joystick_0(usb_joy1),
+	.joystick_1(usb_joy2),
+	//END
 	.spinner_0(spinner_0),
 	.spinner_1(spinner_1)
 );
+
+
+
+//////////////////   LLAPI   ///////////////////
+
+
+reg llapi_button_pressed, llapi_button_pressed2;
+
+// button pressed detection
+always @(posedge CLK_50M) begin
+        if (iRST) begin
+                llapi_button_pressed  <= 0;
+                llapi_button_pressed2 <= 0;
+        end else begin
+                if (|llapi_buttons)
+                        llapi_button_pressed  <= 1;
+                if (|llapi_buttons2)
+                        llapi_button_pressed2 <= 1;
+        end
+end
+
+// controller id is 0 if there is either an Atari controller or no controller
+// if id is 0, assume there is no controller until a button is pressed
+// also check for 255 and treat that as 'no controller' as well
+wire use_llapi  = llapi_en  && llapi_select && ((|llapi_type  && ~(&llapi_type))  || llapi_button_pressed);
+wire use_llapi2 = llapi_en2 && llapi_select && ((|llapi_type2 && ~(&llapi_type2)) || llapi_button_pressed2);
+
+
+//USER_LED feedback when a LLAPI button is pressed
+//For debug purpose
+reg MY_LED;
+
+always @(posedge clk_sys) begin
+	if (|llapi_buttons)
+		MY_LED <= 1'b1;
+	else
+		MY_LED <= 1'b0;
+end
+
+wire [31:0] llapi_buttons, llapi_buttons2;
+wire [71:0] llapi_analog, llapi_analog2;
+wire [7:0]  llapi_type, llapi_type2;
+wire llapi_en, llapi_en2;
+
+wire llapi_select = status[10]; // This is the status bit from the Menu (see Menu configuration block to check what bits need to be tested)
+
+
+wire llapi_latch_o, llapi_latch_o2, llapi_data_o, llapi_data_o2;
+
+//connect the pins of USER I/O port from the I/O board to BliSTer (if LLAPI has been selected in the OSD menu)
+
+// Indexes for reference:
+// 0 = D+    = P1 Latch
+// 1 = D-    = P1 Data
+// 2 = TX-   = LLAPI Enable
+// 3 = GND_d = N/C
+// 4 = RX+   = P2 Latch
+// 5 = RX-   = P2 Data
+
+always_comb begin
+	USER_OUT = 6'b111111;
+	//LLAPI selected in OSD menu
+	if (llapi_select) begin
+		USER_OUT[0] = llapi_latch_o;
+		USER_OUT[1] = llapi_data_o;
+		USER_OUT[2] = ~(llapi_select & ~OSD_STATUS); //This is the Red or Green LED on the BliSter
+		USER_OUT[4] = llapi_latch_o2;
+		USER_OUT[5] = llapi_data_o2;
+	end else begin
+		USER_OUT[0] = 1'b1;
+		USER_OUT[1] = 1'b1;
+	end
+end
+
+//LLAPI string configuration for port 1
+LLAPI llapi
+(
+	.CLK_50M(CLK_50M),
+	.LLAPI_SYNC(vblank),
+	.IO_LATCH_IN(USER_IN[0]),
+	.IO_LATCH_OUT(llapi_latch_o),
+	.IO_DATA_IN(USER_IN[1]),
+	.IO_DATA_OUT(llapi_data_o),
+	.ENABLE(llapi_select & ~OSD_STATUS),
+	.LLAPI_BUTTONS(llapi_buttons),
+	.LLAPI_ANALOG(llapi_analog),
+	.LLAPI_TYPE(llapi_type),
+	.LLAPI_EN(llapi_en)
+);
+
+//LLAPI string configuration for port 2
+LLAPI llapi2
+(
+	.CLK_50M(CLK_50M),
+	.LLAPI_SYNC(vblank),
+	.IO_LATCH_IN(USER_IN[4]),
+	.IO_LATCH_OUT(llapi_latch_o2),
+	.IO_DATA_IN(USER_IN[5]),
+	.IO_DATA_OUT(llapi_data_o2),
+	.ENABLE(llapi_select & ~OSD_STATUS),
+	.LLAPI_BUTTONS(llapi_buttons2),
+	.LLAPI_ANALOG(llapi_analog2),
+	.LLAPI_TYPE(llapi_type2),
+	.LLAPI_EN(llapi_en2)
+);
+
+
+// Controller string provided by core for reference (order is important)
+//Controller specific mapping based on type. More info here : https://docs.google.com/document/d/12XpxrmKYx_jgfEPyw-O2zex1kTQZZ-NSBdLO2RQPRzM/edit
+//To be checked : button ref id are HID button id - 1 ?
+
+//Mapping :  			"J1,Trig1,Trig2,Trig3,Trig4,Trig5,Start 1P,Start 2P,Coin,Pause;",
+
+
+wire [15:0] joy_ll_a = {
+				//Read the list from the end : "Trig1,Trig2,Trig3,Trig4,Trig5,Start 1P,Start 2P,Coin,Pause;",
+				
+				1'b0, llapi_buttons[4], 1'b0,llapi_buttons[5], llapi_buttons[6], llapi_buttons[3], llapi_buttons[2], llapi_buttons[1], llapi_buttons[0],
+				llapi_buttons[27], llapi_buttons[26], llapi_buttons[25], llapi_buttons[24] 	// d-pad
+			};
+
+		
+wire [15:0] joy_ll_b = {
+
+				//Read the list from the end : "Trig1,Trig2,Trig3,Trig4,Trig5,Start 1P,Start 2P,Coin,Pause;",
+				1'b0, llapi_buttons2[4], llapi_buttons2[5],1'b0, llapi_buttons2[6], llapi_buttons2[3], llapi_buttons2[2], llapi_buttons2[1], llapi_buttons2[0],
+				llapi_buttons2[27], llapi_buttons2[26], llapi_buttons2[25], llapi_buttons2[24] 	// d-pad
+			};
+
+//Assign (DOWN + FIRST BUTTON) Combinaison to bring the OSD up - P1 and P1 ports.
+//TODO : Support long press detection
+wire llapi_osd = (llapi_buttons[26] & llapi_buttons[5] & llapi_buttons[0]) || (llapi_buttons2[26] & llapi_buttons2[5] & llapi_buttons2[0]);
+
+
+// Fixed ports assignment :
+//LLAPI port 1 = Player 1
+//LLAPI port 2 = Player 2
+//if LLAPI is enabled, shift USB controllers over to the next available player slot
+
+
+always_comb begin
+        if (use_llapi & use_llapi2) begin
+		
+				joy1 = joy_ll_a;
+				joy2 = joy_ll_b;		
+	
+        end else if (use_llapi ^ use_llapi2) begin
+		
+				joy1 = use_llapi ? joy_ll_a : usb_joy1;
+				joy2 = use_llapi2 ? joy_ll_b : usb_joy1;
+				
+        end else begin
+		
+				joy1 = usb_joy1;
+				joy2 = usb_joy2;
+			
+	end
+end
+
+////////////////////////////////////////     END OF LLAPI MAIN BLOCK   ///////////////////////////////////////////////////////////
+
+
 
 reg [7:0] SYSMODE;	// [0]=SYS1/SYS2,[1]=H/V,[2]=H256/H240,[3]=water match control,[4]=CW/CCW,[5]=spinner,[6] HS start delay for TeddyBoy Blues (27 seconds!)
 reg [7:0] DSW[8];
