@@ -192,21 +192,17 @@ assign VIDEO_ARY = (!ar) ? (screen_H ? 12'd2191 : 12'd2400) : 12'd0;
 `include "build_id.v" 
 localparam CONF_STR = {
 	"A.SEGASYS1;;",
+		//LLAPI: OSD menu item
+	//LLAPI Always ON
+	"-,<< LLAPI enabled >>;",
+	"-,<< Use USER I/O port >>;",
 	"-;",
+	//END LLAPI	
 	"H0OEF,Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
 	"H0O6,Orientation,Vert,Horz;", 
 	"O35,Scandoubler Fx,None,HQ2x,CRT 25%,CRT 50%,CRT 75%;",
 	"O7,Pause when OSD is open,On,Off;",
 	"-;",
-	
-	//LLAPI
-	//Add LLAPI option to the OSD menu, swapped NONE with LLAPI
-	//To detect LLAPI status[10] = 1 
-	//Always double check witht the bits map allocation table to avoid conflicts	
-	"OA,LLAPI,OFF,ON;",
-	"-;",
-	//END
-	
 	"DIP;",
 	"-;",
 	"OOS,Analog Video H-Pos,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31;",
@@ -333,7 +329,7 @@ wire [71:0] llapi_analog, llapi_analog2;
 wire [7:0]  llapi_type, llapi_type2;
 wire llapi_en, llapi_en2;
 
-wire llapi_select = status[10]; // This is the status bit from the Menu (see Menu configuration block to check what bits need to be tested)
+wire llapi_select = 1'b1;
 
 
 wire llapi_latch_o, llapi_latch_o2, llapi_data_o, llapi_data_o2;
@@ -418,8 +414,7 @@ wire [15:0] joy_ll_b = {
 				llapi_buttons2[27], llapi_buttons2[26], llapi_buttons2[25], llapi_buttons2[24] 	// d-pad
 			};
 
-//Assign (DOWN + FIRST BUTTON) Combinaison to bring the OSD up - P1 and P1 ports.
-//TODO : Support long press detection
+//Assign (DOWN + START + FIRST BUTTON) Combinaison to bring the OSD up - P1 and P2 ports.
 wire llapi_osd = (llapi_buttons[26] & llapi_buttons[5] & llapi_buttons[0]) || (llapi_buttons2[26] & llapi_buttons2[5] & llapi_buttons2[0]);
 
 
